@@ -184,6 +184,17 @@ equity + pot odds + a personality.
   the Daily's replay rests on; `tests/aiExperiment.test.ts` pins that with a
   fingerprint. `fastShowdown` settles the Monte-Carlo showdowns with `rankHoldem`
   (`rank7.ts`): the same winners as pokersolver, so the same decisions, 12-34x sooner at The Main Event.
+  `weightedRanges` (version `wrange`) reads each opponent as a weight on every one
+  of the 1,326 holdings instead of one selectivity number (`ai/weightedRange.ts`,
+  after the Loki/Poki opponent model): weights start from position and the
+  preflop action (open, call, 3-bet), and every later action multiplies them by
+  how likely that action was with that holding, judged by a fast effective
+  strength per street (share of random holdings beaten via `rankHoldem`, plus a
+  fixed bump for a live draw in place of exact hand potential), floored at
+  `FLOOR`. So a check-call line caps a range and a river overbet polarises it.
+  `estimateEquity` samples opponents from the weights (`opponentRanges`). It
+  reads three more memory tallies, kept for it alone: 3-bets, folds to a c-bet
+  and went-to-showdown (`observeHandEnd`, fed at the end of every hand).
 - Difficulty scales per venue via the profile (see `config/venues.ts`).
 
 ## Variants

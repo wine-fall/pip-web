@@ -63,6 +63,7 @@ pnpm bot-duel --layout solo                     # one new bot at a table of old 
 pnpm bot-duel --a v1@cardroom --b v1@garage     # one rung against another
 pnpm exploit-sim --ai exact                     # the scripted heroes, against a version
 pnpm persona-stats casino                       # can a tracker tell the cast apart?
+pnpm ai-bench --ai v1,fast,wrange               # milliseconds per decision, by version
 ```
 
 Quote the 95% band, never the rate alone. `fast` makes exactly v1's decisions, so
