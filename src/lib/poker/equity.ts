@@ -163,7 +163,7 @@ function drawRangedHoles(
   return { oppHoles, board }
 }
 
-/** How often a weighted draw may collide with a card already out before giving up on it. */
+/** How many colliding weighted deals to redraw before falling back to dealing in order. */
 const WEIGHTED_RETRIES = 24
 
 /**
@@ -206,9 +206,12 @@ function sampleCombo(s: RangeSampler, rng: Rng): number {
 
 /**
  * Deal each opponent from their weighted range and the rest of the board from
- * what is left. A sampled holding that collides with a card already dealt this
- * run is drawn again; after `WEIGHTED_RETRIES` misses (a range all but emptied
- * by the other hands) the opponent gets two random live cards instead.
+ * what is left. When two sampled holdings share a card the whole set is drawn
+ * again, not just the later one: redrawing only the later hand would leave the
+ * earlier ones at their unconditioned odds, and the answer would depend on the
+ * order the opponents are listed in. After `WEIGHTED_RETRIES` collisions (ranges
+ * that all but exclude each other) it falls back to dealing in order, with two
+ * random live cards for any opponent whose range has nothing left.
  */
 function drawWeightedHoles(
   live: readonly number[],
@@ -218,36 +221,60 @@ function drawWeightedHoles(
   community: readonly Card[],
   rng: Rng,
 ): { oppHoles: Card[][]; board: Card[] } {
-  const used = dead.slice()
   const n = live.length
+  let used = dead.slice()
   const pickUnused = (): number => {
     let card = live[Math.floor(rng() * n)]
     while (used[card]) card = live[Math.floor(rng() * n)]
     return card
   }
-  const oppHoles: Card[][] = []
-  for (const sampler of samplers) {
-    let a = -1
-    let b = -1
-    if (sampler) {
-      for (let tries = 0; tries < WEIGHTED_RETRIES; tries++) {
-        const c = sampleCombo(sampler, rng)
-        if (!used[COMBO_A[c]] && !used[COMBO_B[c]]) {
-          a = COMBO_A[c]
-          b = COMBO_B[c]
-          break
-        }
-      }
-    }
-    if (a < 0) {
-      a = pickUnused()
-      used[a] = 1
-      b = pickUnused()
-    }
+  const randomHole = (): [number, number] => {
+    const a = pickUnused()
     used[a] = 1
+    const b = pickUnused()
     used[b] = 1
-    oppHoles.push([CARD_AT[a], CARD_AT[b]])
+    return [a, b]
   }
+
+  let holes: [number, number][] = []
+  let dealt = false
+  for (let tries = 0; tries < WEIGHTED_RETRIES && !dealt; tries++) {
+    used = dead.slice()
+    holes = []
+    dealt = true
+    for (const sampler of samplers) {
+      if (!sampler) {
+        holes.push(randomHole())
+        continue
+      }
+      const c = sampleCombo(sampler, rng)
+      if (used[COMBO_A[c]] || used[COMBO_B[c]]) {
+        dealt = false
+        break
+      }
+      used[COMBO_A[c]] = 1
+      used[COMBO_B[c]] = 1
+      holes.push([COMBO_A[c], COMBO_B[c]])
+    }
+  }
+  if (!dealt) {
+    used = dead.slice()
+    holes = []
+    for (const sampler of samplers) {
+      let hole: [number, number] | null = null
+      for (let tries = 0; sampler && tries < WEIGHTED_RETRIES && !hole; tries++) {
+        const c = sampleCombo(sampler, rng)
+        if (!used[COMBO_A[c]] && !used[COMBO_B[c]]) hole = [COMBO_A[c], COMBO_B[c]]
+      }
+      if (hole) {
+        used[hole[0]] = 1
+        used[hole[1]] = 1
+      }
+      holes.push(hole ?? randomHole())
+    }
+  }
+
+  const oppHoles = holes.map(([a, b]) => [CARD_AT[a], CARD_AT[b]])
   const board = [...community]
   for (let i = 0; i < boardNeeded; i++) {
     const card = pickUnused()

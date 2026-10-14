@@ -21,6 +21,10 @@ function arg(name: string, fallback: string): string {
 const venueId = arg('venue', 'mainevent')
 const venue = venueById(venueId)
 if (!venue) throw new Error(`unknown venue "${venueId}"`)
+// The hands below are Hold'em, so another game's venue would be timed at the wrong game.
+if ((venue.variant ?? 'holdem') !== 'holdem') {
+  throw new Error(`${venue.name} is not Hold'em; ai-bench times Hold'em venues only`)
+}
 const hands = Number(arg('hands', '60'))
 const seats = Math.min(venue.seats, 6)
 const versions = arg('ai', 'v1,fast,wrange').split(',')

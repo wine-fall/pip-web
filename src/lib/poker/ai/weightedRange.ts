@@ -205,9 +205,13 @@ function replay(state: HandState): Read[] {
   const reads: Read[] = []
   let potStart = 0
   let street: Street = 'preflop'
+  // A blind is posted only as far as the stack goes, and a seat all in on its
+  // blind never acts, so nothing later in the log would correct a full one.
+  const posted = (id: string, blind: number) =>
+    Math.min(blind, state.players.find((p) => p.id === id)?.committedThisHand ?? blind)
   let to = new Map<string, number>([
-    [sbId, state.smallBlind],
-    [bbId, state.bigBlind],
+    [sbId, posted(sbId, state.smallBlind)],
+    [bbId, posted(bbId, state.bigBlind)],
   ])
   let high = state.bigBlind
   let raises = 0
@@ -227,7 +231,9 @@ function replay(state: HandState): Read[] {
     }
     const before = to.get(a.playerId) ?? 0
     const potBefore = potStart + sum()
-    const chips = isAggressive(a) ? a.to - before : a.type === 'call' ? high - before : 0
+    // `a.to` is what the action actually put in, so an all-in call for less
+    // is read at its own price rather than the full bet's.
+    const chips = isAggressive(a) || a.type === 'call' ? a.to - before : 0
     let behind = 0
     if (street === 'preflop' && !actedPreflop.has(a.playerId)) {
       behind = order.length - 1 - order.indexOf(a.playerId)

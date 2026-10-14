@@ -162,6 +162,28 @@ test('estimateEquity samples from a weighted range', (t) => {
   t.true(equity > 0.77 && equity < 0.86, `${equity}`)
 })
 
+test('overlapping weighted ranges give the same equity in either order', (t) => {
+  // Three legal joint holdings, equally likely: the hero's queens win one.
+  const range = (...holes: string[]) => {
+    const w = new Float64Array(COMBOS)
+    for (const h of holes) w[comboIndex(...(cards(h) as [never, never]))] = 1
+    return w
+  }
+  const x = range('As Ad', 'Ks Kd')
+  const y = range('As Ah', 'Jc Jd')
+  const eq = (ranges: Float64Array[]) =>
+    estimateEquity({
+      hole: cards('Qs Qd'),
+      community: cards('Kh Qh 2c 3c 4d'),
+      opponents: 2,
+      iterations: 6000,
+      rng: mulberry32(4),
+      opponentRanges: ranges,
+      fastShowdown: true,
+    }).equity
+  for (const e of [eq([x, y]), eq([y, x])]) t.true(Math.abs(e - 1 / 3) < 0.03, `${e}`)
+})
+
 test('memory counts 3-bets, folds to c-bets and showdowns', (t) => {
   const memory = createTableMemory()
   let s = startHand({

@@ -581,7 +581,6 @@ function recordStep(prev: HandState, action: Action, next: HandState) {
   const actor = prev.players[prev.toActIndex]
   if (actor) {
     observeAction(tableReads, prev, action)
-    if (isHandComplete(next)) observeHandEnd(tableReads, next)
     const legal = legalActions(prev)
     const amount =
       action.type === 'call'
@@ -787,6 +786,8 @@ export const useGame = create<GameState>((set, get) => {
     const { hand, seats, venue } = get()
     if (!hand || !venue) return
 
+    // Here rather than per action, so a hand the deal itself finished counts too.
+    observeHandEnd(tableReads, hand)
     const stackById = new Map(hand.players.map((p) => [p.id, p.stack]))
     const nextSeats = seats.map((s) => ({ ...s, stack: stackById.get(s.id) ?? s.stack }))
 
