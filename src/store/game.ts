@@ -51,6 +51,7 @@ import {
   createTableMemory,
   credibility,
   observeAction,
+  observeHandEnd,
   type TableMemory,
 } from '@/lib/poker/ai/memory'
 import { decideDiscard } from '@/lib/poker/ai/draw'
@@ -580,6 +581,7 @@ function recordStep(prev: HandState, action: Action, next: HandState) {
   const actor = prev.players[prev.toActIndex]
   if (actor) {
     observeAction(tableReads, prev, action)
+    if (isHandComplete(next)) observeHandEnd(tableReads, next)
     const legal = legalActions(prev)
     const amount =
       action.type === 'call'

@@ -13,7 +13,7 @@
 
 import test from 'ava'
 import { decideAction, type AiProfile } from '@/lib/poker/ai/policy'
-import { createTableMemory, observeAction } from '@/lib/poker/ai/memory'
+import { createTableMemory, observeAction, observeHandEnd } from '@/lib/poker/ai/memory'
 import { cardFromString, mulberry32 } from '@/lib/poker/cards'
 import { applyAction, isHandComplete, startHand } from '@/lib/poker/engine'
 import { estimateEquity } from '@/lib/poker/equity'
@@ -50,6 +50,7 @@ function fingerprint(tweak: (p: AiProfile) => AiProfile = (p) => p): string {
         observeAction(memory, s, a)
         s = applyAction(s, a)
       }
+      observeHandEnd(memory, s)
     }
   }
   return (h >>> 0).toString(16)
@@ -65,6 +66,26 @@ test('with no experiment set, the AI makes exactly the decisions it shipped with
 test('fastShowdown makes exactly the same decisions', (t) => {
   t.is(
     fingerprint((p) => ({ ...p, experiment: { fastShowdown: true } })),
+    SHIPPED,
+  )
+})
+
+test('weightedRanges off, or the new memory tallies kept, changes nothing shipped', (t) => {
+  // The fingerprint feeds every hand's end to the memory, so the 3-bet,
+  // fold-to-c-bet and showdown tallies fill up; the shipped AI must not read them.
+  t.is(
+    fingerprint((p) => ({ ...p, experiment: { weightedRanges: false } })),
+    SHIPPED,
+  )
+  t.is(
+    fingerprint((p) => ({ ...p, experiment: { fastShowdown: true, weightedRanges: false } })),
+    SHIPPED,
+  )
+})
+
+test('weightedRanges does change decisions, so the switch is live', (t) => {
+  t.not(
+    fingerprint((p) => ({ ...p, experiment: { fastShowdown: true, weightedRanges: true } })),
     SHIPPED,
   )
 })

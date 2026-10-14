@@ -19,6 +19,7 @@ import { holeStrength, preflopPercentile } from '../range'
 import { barrelledEveryStreet, checkRaised, lineOf, preflopAggressor, streetIsUnbet } from './line'
 import { credibility, foldiness, type TableMemory } from './memory'
 import { pushFoldAction } from './pushFold'
+import { opponentRanges } from './weightedRange'
 
 /**
  * A habit a character plays with, on top of their numbers: the thing a regular
@@ -69,6 +70,12 @@ export interface AiExperiment {
    * first three chairs all open like six-handed under the gun.
    */
   openingByBehind?: readonly number[]
+  /**
+   * Read each opponent as a weighted range over every holding, reweighted by
+   * every action they take (`weightedRange.ts`), instead of one selectivity
+   * number. Hold'em only.
+   */
+  weightedRanges?: boolean
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n))
@@ -278,6 +285,10 @@ export function decideAction(
     variant: state.variant,
     fastShowdown: profile.experiment?.fastShowdown,
     exactRange: profile.experiment?.exactRange,
+    opponentRanges:
+      profile.experiment?.weightedRanges && state.variant === 'holdem'
+        ? opponentRanges(state, player, opponents, memory, skill)
+        : undefined,
   })
 
   // Unskilled players misread their hand strength. The noisy estimate feeds

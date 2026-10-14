@@ -4,6 +4,7 @@
 
 import type { Card, Rank, Rng, Suit } from './cards'
 import { RANKS, SUITS } from './cards'
+import { CARD_AT, COMBO_A, COMBO_B, COMBOS, cardIndex } from './combos'
 import { DECK_RANKS, HOLE_CARDS, type Variant, determineWinners } from './handEval'
 import { exactStrength, holeStrength, omahaStrength } from './range'
 import { rankHoldem } from './rank7'
@@ -61,6 +62,14 @@ export interface EquityOptions {
    * Hold'em only.
    */
   exactRange?: boolean
+  /**
+   * Per-opponent weighted ranges: one weight per two-card combo (`combos.ts`),
+   * any scale, and each opponent's holding is sampled in proportion to it.
+   * Replaces `opponentSelectivity` for every opponent that has one; a missing
+   * entry is a random hand. Hold'em only, ignored elsewhere. Built by
+   * `ai/weightedRange.ts` for the AI's `weightedRanges` experiment.
+   */
+  opponentRanges?: readonly (Float64Array | null | undefined)[]
 }
 
 function cardKey(c: Card): string {
@@ -154,6 +163,100 @@ function drawRangedHoles(
   return { oppHoles, board }
 }
 
+/** How often a weighted draw may collide with a card already out before giving up on it. */
+const WEIGHTED_RETRIES = 24
+
+/**
+ * A weighted range ready to sample: cumulative weights over the combos left
+ * once the hero's cards and the board are out, or null for a random hand.
+ */
+interface RangeSampler {
+  combos: Uint16Array
+  cumulative: Float64Array
+  total: number
+}
+
+function rangeSampler(weights: Float64Array, dead: Uint8Array): RangeSampler | null {
+  const combos: number[] = []
+  const cumulative: number[] = []
+  let total = 0
+  for (let c = 0; c < COMBOS; c++) {
+    const w = weights[c]
+    if (!(w > 0) || dead[COMBO_A[c]] || dead[COMBO_B[c]]) continue
+    total += w
+    combos.push(c)
+    cumulative.push(total)
+  }
+  if (combos.length === 0) return null
+  return { combos: Uint16Array.from(combos), cumulative: Float64Array.from(cumulative), total }
+}
+
+/** One combo from a sampler, by binary search over the cumulative weights. */
+function sampleCombo(s: RangeSampler, rng: Rng): number {
+  const target = rng() * s.total
+  let lo = 0
+  let hi = s.combos.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (s.cumulative[mid] <= target) lo = mid + 1
+    else hi = mid
+  }
+  return s.combos[lo]
+}
+
+/**
+ * Deal each opponent from their weighted range and the rest of the board from
+ * what is left. A sampled holding that collides with a card already dealt this
+ * run is drawn again; after `WEIGHTED_RETRIES` misses (a range all but emptied
+ * by the other hands) the opponent gets two random live cards instead.
+ */
+function drawWeightedHoles(
+  live: readonly number[],
+  dead: Uint8Array,
+  samplers: readonly (RangeSampler | null)[],
+  boardNeeded: number,
+  community: readonly Card[],
+  rng: Rng,
+): { oppHoles: Card[][]; board: Card[] } {
+  const used = dead.slice()
+  const n = live.length
+  const pickUnused = (): number => {
+    let card = live[Math.floor(rng() * n)]
+    while (used[card]) card = live[Math.floor(rng() * n)]
+    return card
+  }
+  const oppHoles: Card[][] = []
+  for (const sampler of samplers) {
+    let a = -1
+    let b = -1
+    if (sampler) {
+      for (let tries = 0; tries < WEIGHTED_RETRIES; tries++) {
+        const c = sampleCombo(sampler, rng)
+        if (!used[COMBO_A[c]] && !used[COMBO_B[c]]) {
+          a = COMBO_A[c]
+          b = COMBO_B[c]
+          break
+        }
+      }
+    }
+    if (a < 0) {
+      a = pickUnused()
+      used[a] = 1
+      b = pickUnused()
+    }
+    used[a] = 1
+    used[b] = 1
+    oppHoles.push([CARD_AT[a], CARD_AT[b]])
+  }
+  const board = [...community]
+  for (let i = 0; i < boardNeeded; i++) {
+    const card = pickUnused()
+    used[card] = 1
+    board.push(CARD_AT[card])
+  }
+  return { oppHoles, board }
+}
+
 export function estimateEquity(opts: EquityOptions): EquityResult {
   const community = opts.community ?? []
   const iterations = opts.iterations ?? 1500
@@ -186,6 +289,25 @@ export function estimateEquity(opts: EquityOptions): EquityResult {
   const fast = !!opts.fastShowdown && variant === 'holdem'
   const ranged = !!strength && !!selectivity && selectivity.some((s) => s > 0)
 
+  // Weighted ranges, when given, take the place of selectivity entirely.
+  let weighted: {
+    live: number[]
+    dead: Uint8Array
+    samplers: (RangeSampler | null)[]
+  } | null = null
+  if (variant === 'holdem' && opts.opponentRanges) {
+    const dead = new Uint8Array(52)
+    for (const c of [...opts.hole, ...community]) dead[cardIndex(c)] = 1
+    const live: number[] = []
+    for (let i = 0; i < 52; i++) if (!dead[i]) live.push(i)
+    const samplers: (RangeSampler | null)[] = []
+    for (let o = 0; o < opponents; o++) {
+      const w = opts.opponentRanges[o]
+      samplers.push(w ? rangeSampler(w, dead) : null)
+    }
+    weighted = { live, dead, samplers }
+  }
+
   let wins = 0
   let ties = 0
   let equitySum = 0
@@ -196,7 +318,16 @@ export function estimateEquity(opts: EquityOptions): EquityResult {
     // opponent gets a uniformly random hand (classic raw equity).
     let oppHoles: Card[][]
     let board: Card[]
-    if (ranged) {
+    if (weighted) {
+      ;({ oppHoles, board } = drawWeightedHoles(
+        weighted.live,
+        weighted.dead,
+        weighted.samplers,
+        boardNeeded,
+        community,
+        rng,
+      ))
+    } else if (ranged) {
       ;({ oppHoles, board } = drawRangedHoles(
         base,
         opponents,

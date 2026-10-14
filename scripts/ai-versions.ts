@@ -54,6 +54,11 @@ export const POLICIES: Record<string, Policy> = {
     decide: decideAction,
     profile: withExperiment({ fastShowdown: true, exactRange: true }),
   },
+  wrange: {
+    about: 'fast, with opponents read as weighted ranges reweighted by every action',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true, weightedRanges: true }),
+  },
   open8: {
     about: 'fast, with first-in opening shares for seven and eight behind',
     decide: decideAction,

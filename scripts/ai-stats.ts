@@ -15,7 +15,7 @@
 // sit well outside them, and the top of the ladder near them.
 
 import { decideAction, type AiProfile } from '@/lib/poker/ai/policy'
-import { createTableMemory, observeAction } from '@/lib/poker/ai/memory'
+import { createTableMemory, observeAction, observeHandEnd } from '@/lib/poker/ai/memory'
 import { mulberry32 } from '@/lib/poker/cards'
 import {
   type Action,
@@ -154,6 +154,7 @@ function playHand(
     observeAction(memory, state, action)
     state = applyAction(state, action)
   }
+  observeHandEnd(memory, state)
   for (const p of state.players) {
     if (p.status === 'out') continue
     bump('vpip', vpip.has(p.id))

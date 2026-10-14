@@ -55,7 +55,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { blindsAt } from '@/config/blinds'
 import { type Venue, venueById } from '@/config/venues'
 import type { AiProfile } from '@/lib/poker/ai/policy'
-import { createTableMemory, observeAction, type TableMemory } from '@/lib/poker/ai/memory'
+import {
+  createTableMemory,
+  observeAction,
+  observeHandEnd,
+  type TableMemory,
+} from '@/lib/poker/ai/memory'
 import { mulberry32, type Rng } from '@/lib/poker/cards'
 import { applyAction, type HandState, isHandComplete, startHand } from '@/lib/poker/engine'
 import { type Decider, POLICIES } from './ai-versions'
@@ -193,6 +198,7 @@ function playHand(
     observeAction(memory, state, action)
     state = applyAction(state, action)
   }
+  observeHandEnd(memory, state)
   tracker.finish(state, startStacks)
   return state
 }
