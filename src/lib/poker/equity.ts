@@ -5,7 +5,7 @@
 import type { Card, Rank, Rng, Suit } from './cards'
 import { RANKS, SUITS } from './cards'
 import { DECK_RANKS, HOLE_CARDS, type Variant, determineWinners } from './handEval'
-import { exactStrength, holeStrength, omahaStrength } from './range'
+import { exactStrength, holeStrength, omahaStrength, preflopTop } from './range'
 import { rankHoldem } from './rank7'
 
 /** How many candidate holdings a maximally-tight opponent picks the best of. */
@@ -61,6 +61,13 @@ export interface EquityOptions {
    * Hold'em only.
    */
   exactRange?: boolean
+  /**
+   * Per-opponent percentile range before the flop: an entry of 0.06 deals that
+   * opponent a hand drawn evenly from the top 6% of starting hands (by
+   * `holeStrength`), in place of their `opponentSelectivity`. Missing entries
+   * keep the selectivity read. Hold'em preflop only, ignored elsewhere.
+   */
+  opponentTopShare?: readonly (number | undefined)[]
 }
 
 function cardKey(c: Card): string {
@@ -105,6 +112,8 @@ function drawRangedHoles(
   community: readonly Card[],
   strength: (hole: readonly Card[], community: readonly Card[]) => number,
   rng: Rng,
+  topRanges?: readonly (readonly (readonly Card[])[] | undefined)[],
+  baseIndex?: ReadonlyMap<string, number>,
 ): { oppHoles: Card[][]; board: Card[] } {
   const n = base.length
   const used = new Array<boolean>(n).fill(false)
@@ -116,6 +125,15 @@ function drawRangedHoles(
 
   const oppHoles: Card[][] = []
   for (let o = 0; o < opponents; o++) {
+    const top = topRanges?.[o]
+    if (top && baseIndex) {
+      const chosen = drawFromTop(top, baseIndex, used, rng)
+      if (chosen) {
+        for (const i of chosen) used[i] = true
+        oppHoles.push(chosen.map((i) => base[i]))
+        continue
+      }
+    }
     const sel = Math.max(0, Math.min(1, selectivity[o] ?? 0))
     const candidates = 1 + Math.floor(sel * MAX_EXTRA_CANDIDATES)
     let best: number[] | null = null
@@ -154,6 +172,27 @@ function drawRangedHoles(
   return { oppHoles, board }
 }
 
+/**
+ * One holding drawn evenly from a percentile range, as indices into the deck,
+ * skipping any that share a card with the hero, the board or an opponent
+ * already dealt. Null when a few tries find none free: the caller falls back to
+ * the selectivity read rather than loop on a range the dead cards have emptied.
+ */
+function drawFromTop(
+  top: readonly (readonly Card[])[],
+  baseIndex: ReadonlyMap<string, number>,
+  used: readonly boolean[],
+  rng: Rng,
+): number[] | null {
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const hole = top[Math.floor(rng() * top.length)]
+    const a = baseIndex.get(cardKey(hole[0]))
+    const b = baseIndex.get(cardKey(hole[1]))
+    if (a !== undefined && b !== undefined && !used[a] && !used[b]) return [a, b]
+  }
+  return null
+}
+
 export function estimateEquity(opts: EquityOptions): EquityResult {
   const community = opts.community ?? []
   const iterations = opts.iterations ?? 1500
@@ -184,7 +223,14 @@ export function estimateEquity(opts: EquityOptions): EquityResult {
         ? omahaStrength
         : null
   const fast = !!opts.fastShowdown && variant === 'holdem'
-  const ranged = !!strength && !!selectivity && selectivity.some((s) => s > 0)
+  const topShare =
+    variant === 'holdem' && community.length === 0 ? opts.opponentTopShare : undefined
+  const topRanges = topShare?.map((share) => (share ? preflopTop(share) : undefined))
+  const baseIndex = topRanges?.some(Boolean)
+    ? new Map(base.map((c, i) => [cardKey(c), i]))
+    : undefined
+  const ranged =
+    (!!strength && !!selectivity && selectivity.some((s) => s > 0)) || baseIndex !== undefined
 
   let wins = 0
   let ties = 0
@@ -202,10 +248,12 @@ export function estimateEquity(opts: EquityOptions): EquityResult {
         opponents,
         holeSize,
         boardNeeded,
-        selectivity as readonly number[],
+        selectivity ?? [],
         community,
         strength as NonNullable<typeof strength>,
         rng,
+        topRanges,
+        baseIndex,
       ))
     } else {
       const need = opponents * holeSize + boardNeeded

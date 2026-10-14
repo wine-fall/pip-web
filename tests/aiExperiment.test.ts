@@ -17,7 +17,8 @@ import { createTableMemory, observeAction } from '@/lib/poker/ai/memory'
 import { cardFromString, mulberry32 } from '@/lib/poker/cards'
 import { applyAction, isHandComplete, startHand } from '@/lib/poker/engine'
 import { estimateEquity } from '@/lib/poker/equity'
-import { exactStrength, holeStrength } from '@/lib/poker/range'
+import { exactStrength, holeStrength, preflopPercentile, preflopTop } from '@/lib/poker/range'
+import { levelShare, openShare } from '@/lib/poker/ai/preflopRanges'
 import { venueById, type Venue } from '@/config/venues'
 
 const cards = (s: string) => s.split(' ').map(cardFromString)
@@ -144,4 +145,119 @@ test('openingByBehind is read by the number of players behind', (t) => {
     ).type
   t.is(opener(0), 'fold')
   t.is(opener(1), 'raise')
+})
+
+test('preflopRanges off leaves the shipped decisions alone', (t) => {
+  t.is(
+    fingerprint((p) => ({ ...p, experiment: { fastShowdown: true, preflopRanges: false } })),
+    SHIPPED,
+  )
+})
+
+test('preflopRanges changes the decisions it is meant to', (t) => {
+  t.not(
+    fingerprint((p) => ({ ...p, experiment: { fastShowdown: true, preflopRanges: true } })),
+    SHIPPED,
+  )
+})
+
+/**
+ * Six-handed, button on seat 0: under the gun (seat 3) opens to 3bb, the
+ * cutoff 3-bets to 9bb, everybody else folds, and the opener is to act with
+ * `hole`.
+ */
+function facingThreeBet(hole: string) {
+  let s = startHand({
+    seats: Array.from({ length: 6 }, (_, i) => ({ id: `s${i}`, name: `s${i}`, stack: 200 })),
+    buttonIndex: 0,
+    smallBlind: 1,
+    bigBlind: 2,
+    rng: mulberry32(1),
+  })
+  const mine = cards(hole)
+  const taken = new Set(mine.map((c) => c.rank + c.suit))
+  for (const p of s.players) for (const c of p.hole) taken.add(c.rank + c.suit)
+  const spare = ['2c', '2d', '3c', '3d', '4c', '4d', '5c', '5d', '6c', '6d', '7c', '7d']
+    .filter((c) => !taken.has(c))
+    .map(cardFromString)
+  // Hand any card the opener now holds to somebody else's spare.
+  for (const p of s.players) {
+    if (p !== s.players[3])
+      p.hole = p.hole.map((c) =>
+        mine.some((m) => m.rank === c.rank && m.suit === c.suit) ? (spare.pop() as typeof c) : c,
+      )
+  }
+  s.players[3].hole = mine
+  s = applyAction(s, { type: 'raise', amount: 6 })
+  s = applyAction(s, { type: 'fold' })
+  s = applyAction(s, { type: 'raise', amount: 18 })
+  for (let i = 0; i < 3; i++) s = applyAction(s, { type: 'fold' })
+  if (s.toActIndex !== 3) throw new Error('the opener should be to act')
+  return s
+}
+
+function tally(hole: string, preflopRanges: boolean) {
+  const venue = venueById('mainevent') as Venue
+  const profile = {
+    ...venue.ai,
+    iterations: 300,
+    experiment: { fastShowdown: true, preflopRanges },
+  }
+  const state = facingThreeBet(hole)
+  const out = { fold: 0, call: 0, raise: 0 } as Record<string, number>
+  for (let r = 0; r < 60; r++) out[decideAction(state, profile, mulberry32(100 + r)).type]++
+  return out
+}
+
+test('the shipped opener never folds a middling open to a 3-bet; preflopRanges mostly does', (t) => {
+  // The leak `pnpm bot-duel` found: 0.1% folds to a 3-bet at The Main Event.
+  t.is(tally('Kh Js', false).fold, 0)
+  t.true(tally('Kh Js', true).fold >= 50)
+})
+
+test('preflopRanges still 4-bets aces and calls with big ace-king', (t) => {
+  const aces = tally('Ah Ad', true)
+  t.is(aces.fold, 0)
+  t.true(aces.raise > aces.call)
+  t.is(tally('Ah Ks', true).fold, 0)
+})
+
+test('preflopTop is the strongest share of hands, by the same order as preflopPercentile', (t) => {
+  const top = preflopTop(0.05)
+  t.is(top.length, Math.round(0.05 * 1326))
+  for (const hole of top) t.true(preflopPercentile(hole) >= 0.94)
+  t.is(preflopTop(0).length, 1)
+})
+
+test('opponentTopShare deals from the range it names', (t) => {
+  const hole = cards('Kh Qs')
+  const base = { hole, opponents: 1, iterations: 3000, fastShowdown: true }
+  const random = estimateEquity({ ...base, rng: mulberry32(2) }).equity
+  const wide = estimateEquity({ ...base, rng: mulberry32(2), opponentTopShare: [0.3] }).equity
+  const narrow = estimateEquity({ ...base, rng: mulberry32(2), opponentTopShare: [0.03] }).equity
+  t.true(random > wide && wide > narrow, `${random} ${wide} ${narrow}`)
+  // After the flop it is ignored, and the answer is the plain one, draw for draw.
+  const flop = { ...base, community: cards('2c 7d 9h') }
+  t.deepEqual(
+    estimateEquity({ ...flop, rng: mulberry32(4), opponentTopShare: [0.03] }),
+    estimateEquity({ ...flop, rng: mulberry32(4) }),
+  )
+})
+
+test('each raise level is a narrower range than the one it answers', (t) => {
+  for (const open of [0.15, 0.26, 0.42]) {
+    t.true(levelShare(1, open) > levelShare(2, open))
+    t.true(levelShare(2, open) > levelShare(3, open))
+    t.true(levelShare(3, open) >= levelShare(4, open))
+    t.true(levelShare(4, open) >= 0.02)
+  }
+  // A 3-bet range sits where a regular's does: a few percent, more against a steal.
+  t.true(levelShare(2, 0.15) >= 0.05 && levelShare(2, 0.15) <= 0.08)
+  t.true(levelShare(2, 0.42) > levelShare(2, 0.15))
+})
+
+test('openShare reads where the open came from', (t) => {
+  const s = facingThreeBet('Ah Ad')
+  // Under the gun six-handed: five behind.
+  t.is(openShare(s), 0.15)
 })

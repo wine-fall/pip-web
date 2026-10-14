@@ -226,3 +226,29 @@ function privateStraightDraw(hole: readonly Card[], community: readonly Card[]):
   const all = fours(mask([...hole, ...community]))
   return all !== 0 && all !== fours(mask(community))
 }
+
+let preflopOrder: (readonly [Card, Card])[] | null = null
+
+/**
+ * The top `share` of all 1,326 starting hands by `holeStrength`, strongest
+ * first, for drawing an opponent from a percentile range (`estimateEquity`'s
+ * `opponentTopShare`). Never fewer than one hand. Built once, on first use.
+ */
+export function preflopTop(share: number): readonly (readonly [Card, Card])[] {
+  if (!preflopOrder) {
+    const deck: Card[] = []
+    for (const rank of Object.keys(RANK_VALUE) as Rank[]) {
+      for (const suit of ['c', 'd', 'h', 's'] as Suit[]) deck.push({ rank, suit })
+    }
+    const all: { hole: readonly [Card, Card]; s: number }[] = []
+    for (let i = 0; i < deck.length; i++) {
+      for (let j = i + 1; j < deck.length; j++) {
+        all.push({ hole: [deck[i], deck[j]], s: preflopStrength(deck[i], deck[j]) })
+      }
+    }
+    // Stable on ties, so the list is the same on every engine.
+    preflopOrder = all.sort((a, b) => b.s - a.s).map((h) => h.hole)
+  }
+  const n = Math.max(1, Math.min(preflopOrder.length, Math.round(share * preflopOrder.length)))
+  return preflopOrder.slice(0, n)
+}

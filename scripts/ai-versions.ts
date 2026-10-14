@@ -59,6 +59,11 @@ export const POLICIES: Record<string, Policy> = {
     decide: decideAction,
     profile: withExperiment({ fastShowdown: true, openingByBehind: OPENING_EIGHT_HANDED }),
   },
+  pf3: {
+    about: 'fast, with 3-bets and 4-bets read and made from percentile ranges',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true, preflopRanges: true }),
+  },
 }
 
 /** A version's profile at a table: the venue's numbers with its switches on. */

@@ -8,6 +8,7 @@ import {
   LINE,
   OPENING,
   POSTFLOP_GATE,
+  PREFLOP_RANGES,
   PREFLOP_RAISE_STRENGTH,
   PREFLOP_RAISE_THIN_STRENGTH,
   SEMI_BLUFF,
@@ -18,6 +19,7 @@ import { estimateEquity } from '../equity'
 import { holeStrength, preflopPercentile } from '../range'
 import { barrelledEveryStreet, checkRaised, lineOf, preflopAggressor, streetIsUnbet } from './line'
 import { credibility, foldiness, type TableMemory } from './memory'
+import { levelShare, openShare, opponentShares, preflopRaises } from './preflopRanges'
 import { pushFoldAction } from './pushFold'
 
 /**
@@ -69,6 +71,15 @@ export interface AiExperiment {
    * first three chairs all open like six-handed under the gun.
    */
   openingByBehind?: readonly number[]
+  /**
+   * Before the flop, read a re-raised pot by percentile ranges
+   * (`preflopRanges.ts`): equity against a 3-bet or 4-bet is taken against the
+   * top few percent of hands it represents, and it decides 4-bet, call or fold.
+   * The AI's own 3-bets and 4-bets come from the same ranges instead of the
+   * holding-quality gate, which is wider than the top rungs' whole opening
+   * range. Hold'em only.
+   */
+  preflopRanges?: boolean
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n))
@@ -256,6 +267,14 @@ export function decideAction(
 
   const skill = clamp(profile.skill ?? 1, 0, 1)
 
+  // A re-raised pot read by ranges (`preflopRanges`): only set when the
+  // experiment is on, so the shipped AI draws exactly what it always drew.
+  const ranges =
+    profile.experiment?.preflopRanges && state.street === 'preflop' && state.variant === 'holdem'
+      ? preflopRaises(state)
+      : null
+  const reraised = !!ranges && ranges.length >= 2
+
   // Short-stacked and first in, or facing one short shove: play the solved
   // chart (see pushFold.ts). Weaker seats reach for it less often and play the
   // spot by feel instead, which is the mistake a soft table should make.
@@ -278,6 +297,7 @@ export function decideAction(
     variant: state.variant,
     fastShowdown: profile.experiment?.fastShowdown,
     exactRange: profile.experiment?.exactRange,
+    opponentTopShare: reraised ? opponentShares(state, opponents, memory, skill) : undefined,
   })
 
   // Unskilled players misread their hand strength. The noisy estimate feeds
@@ -565,6 +585,18 @@ export function decideAction(
   const continueThreshold =
     (potOdds * oddsFactor + (tightnessTax + posPressure * 0.06) * fieldScale) * stationFactor
 
+  if (ranges && ranges.length >= 1) {
+    return reRaiseAction(state, profile, legal, ranges.length, {
+      equity,
+      potOdds,
+      continueThreshold,
+      roll,
+      fieldScale,
+      misread,
+      rng,
+    })
+  }
+
   if (equity < continueThreshold) {
     // Usually fold; occasionally bluff-raise, or peel one cheaply when close.
     if (legal.canRaise && roll < profile.bluff * 0.5) {
@@ -607,5 +639,73 @@ export function decideAction(
       ),
     }
   }
+  return legal.canCall ? { type: 'call' } : { type: 'check' }
+}
+
+/**
+ * A pot already raised before the flop, under `preflopRanges`. Facing a single
+ * open it only replaces the raise gates, with a 3-bet range that is a slice of
+ * the open, and keeps the shipped continue/fold logic around them. Facing
+ * a re-raise it decides the whole spot: `equity` was taken against the
+ * re-raiser's percentile range, so the price is compared to it directly, less
+ * what a call before the flop fails to realise, and the top of the next level's
+ * range raises again.
+ */
+function reRaiseAction(
+  state: HandState,
+  profile: AiProfile,
+  legal: NonNullable<ReturnType<typeof legalActions>>,
+  raises: number,
+  read: {
+    equity: number
+    potOdds: number
+    continueThreshold: number
+    roll: number
+    fieldScale: number
+    misread: number
+    rng: Rng
+  },
+): Action {
+  const player = state.players[state.toActIndex]
+  const { equity, potOdds, continueThreshold, roll, fieldScale, misread, rng } = read
+  const open = openShare(state)
+  // The range a raise from here would represent, and where this holding sits.
+  const raiseShare = levelShare(raises + 1, open)
+  const percentile = clamp(preflopPercentile(player.hole) + misread * 0.5, 0, 1)
+  const valueRaise = percentile >= 1 - raiseShare
+  const thinRaise = percentile >= 1 - raiseShare * 1.5
+  const raise = (fraction: number): Action => ({
+    type: 'raise',
+    amount: sizedRaise(
+      state,
+      fraction,
+      legal.minRaiseTo,
+      legal.maxRaiseTo,
+      rng,
+      profile.aggression,
+    ),
+  })
+
+  if (raises === 1) {
+    // Facing the open: the shipped equity read and threshold decide whether to
+    // continue, as they always have. Only which hands re-raise moves.
+    if (equity < continueThreshold) {
+      if (legal.canRaise && roll < profile.bluff * PREFLOP_RANGES.bluff) return raise(0.6)
+      const cheap = legal.callAmount <= potSize(state) * 0.15
+      if (legal.canCall && cheap && equity > potOdds * 0.85 && roll < 0.5) return { type: 'call' }
+      return { type: 'fold' }
+    }
+    if (legal.canRaise && valueRaise && roll < 0.45 + profile.aggression * 0.5) return raise(0.7)
+    if (legal.canRaise && thinRaise && roll < profile.aggression * 0.4) return raise(0.5)
+    return legal.canCall ? { type: 'call' } : { type: 'check' }
+  }
+
+  const need =
+    potOdds / PREFLOP_RANGES.realize + profile.tightness * PREFLOP_RANGES.perTightness * fieldScale
+  if (equity < need) {
+    if (legal.canRaise && roll < profile.bluff * PREFLOP_RANGES.bluff) return raise(0.6)
+    return { type: 'fold' }
+  }
+  if (legal.canRaise && valueRaise && roll < 0.45 + profile.aggression * 0.5) return raise(0.7)
   return legal.canCall ? { type: 'call' } : { type: 'check' }
 }
