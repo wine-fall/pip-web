@@ -442,10 +442,12 @@ const IS_ENTRY =
 
 if (IS_ENTRY && process.env.DUEL_SLICE) {
   const input = JSON.parse(process.env.DUEL_SLICE) as SliceInput
+  // A pipe takes 64 KB at a time and exit() drops the rest, so exit once it
+  // has all been written.
   process.stdout.write(
     JSON.stringify(runChunks(configFrom(input), input.deals, input.chunkStart, input.chunkEnd)),
+    () => process.exit(0),
   )
-  process.exit(0)
 }
 
 function runParallel(input: RunInput, deals: number, workers: number): Promise<DuelTotals> {
