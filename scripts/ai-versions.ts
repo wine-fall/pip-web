@@ -59,6 +59,37 @@ export const POLICIES: Record<string, Policy> = {
     decide: decideAction,
     profile: withExperiment({ fastShowdown: true, openingByBehind: OPENING_EIGHT_HANDED }),
   },
+  post: {
+    about:
+      'fast, plus postflop structure: texture, private edge, SPR, draw raises, thin river value',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true, postflopShape: true }),
+  },
+  'post-texture': {
+    about: 'fast, plus one part of post: the c-bet by board texture',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true, postflopShape: { texture: true } }),
+  },
+  'post-edge': {
+    about: 'fast, plus one part of post: the board’s own made hand discounted',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true, postflopShape: { edge: true } }),
+  },
+  'post-spr': {
+    about: 'fast, plus one part of post: top pair committed at a low stack-to-pot ratio',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true, postflopShape: { spr: true } }),
+  },
+  'post-draw': {
+    about: 'fast, plus one part of post: draws raise a bet',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true, postflopShape: { drawRaise: true } }),
+  },
+  'post-thin': {
+    about: 'fast, plus one part of post: thin value on a checked river',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true, postflopShape: { thinValue: true } }),
+  },
 }
 
 /** A version's profile at a table: the venue's numbers with its switches on. */

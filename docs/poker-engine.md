@@ -184,6 +184,12 @@ equity + pot odds + a personality.
   the Daily's replay rests on; `tests/aiExperiment.test.ts` pins that with a
   fingerprint. `fastShowdown` settles the Monte-Carlo showdowns with `rankHoldem`
   (`rank7.ts`): the same winners as pokersolver, so the same decisions, 12-34x sooner at The Main Event.
+  `postflopShape` (`ai/postflop.ts`, version `post`) adds postflop structure:
+  board texture for the raiser's c-bet, the board's own made hand discounted
+  (the hole cards' private edge), top pair committed by a low flop stack-to-pot
+  ratio, draws that raise a bet, and thin value on a checked river. Each part
+  switches on alone (`post-texture`, `post-edge`, `post-spr`, `post-draw`,
+  `post-thin`) so a duel can measure them one at a time.
 - Difficulty scales per venue via the profile (see `config/venues.ts`).
 
 ## Variants

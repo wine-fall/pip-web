@@ -69,6 +69,20 @@ test('fastShowdown makes exactly the same decisions', (t) => {
   )
 })
 
+test('postflopShape switched off makes exactly the shipped decisions', (t) => {
+  t.is(
+    fingerprint((p) => ({ ...p, experiment: { fastShowdown: true, postflopShape: false } })),
+    SHIPPED,
+  )
+})
+
+test('postflopShape switched on changes the decisions it is meant to', (t) => {
+  t.not(
+    fingerprint((p) => ({ ...p, experiment: { fastShowdown: true, postflopShape: true } })),
+    SHIPPED,
+  )
+})
+
 test('fastShowdown gives the same equity to the last bit, ranged or not', (t) => {
   const spots = [
     { hole: 'Ah Kh', community: '', opponents: 5 },

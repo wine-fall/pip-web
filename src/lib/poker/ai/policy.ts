@@ -18,6 +18,7 @@ import { estimateEquity } from '../equity'
 import { holeStrength, preflopPercentile } from '../range'
 import { barrelledEveryStreet, checkRaised, lineOf, preflopAggressor, streetIsUnbet } from './line'
 import { credibility, foldiness, type TableMemory } from './memory'
+import { type PostflopParts, readPostflop, shapedMove } from './postflop'
 import { pushFoldAction } from './pushFold'
 
 /**
@@ -69,6 +70,13 @@ export interface AiExperiment {
    * first three chairs all open like six-handed under the gun.
    */
   openingByBehind?: readonly number[]
+  /**
+   * Postflop structure (`postflop.ts`): board texture for the c-bet, the
+   * board's own made hand discounted, top pair committed at a low
+   * stack-to-pot ratio, draws that raise, and thin value on the river. `true`
+   * is all of it; naming parts switches on just those, for measuring each.
+   */
+  postflopShape?: boolean | PostflopParts
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n))
@@ -284,7 +292,8 @@ export function decideAction(
   // every decision below, so mistakes compound naturally: missed value bets,
   // bad calls, folded winners.
   const misread = (rng() - 0.5) * (1 - skill) * 0.6
-  const equity = clamp(trueEquity + misread, 0.02, 0.98)
+  const shape = readPostflop(state, profile.experiment?.postflopShape)
+  const equity = clamp(trueEquity * (shape?.equityKeep ?? 1) + misread, 0.02, 0.98)
 
   const toCall = legal.callAmount
   const pot = potSize(state)
@@ -354,6 +363,34 @@ export function decideAction(
   const raiseThin = preflop
     ? misjudged >= PREFLOP_RAISE_THIN_STRENGTH
     : equity > fairShare * POSTFLOP_GATE.raiseThin
+
+  // The shaped postflop plays the spots it knows; everything else is below.
+  const shaped = shape
+    ? shapedMove({
+        state,
+        read: shape,
+        legal,
+        equity,
+        fairShare,
+        aggression: profile.aggression,
+        skill,
+        posPressure,
+        memory,
+        rng,
+      })
+    : null
+  if (shaped) {
+    if (shaped.type !== 'bet') return { type: shaped.type }
+    const to = sizedRaise(
+      state,
+      shaped.fraction,
+      legal.minRaiseTo,
+      legal.maxRaiseTo,
+      rng,
+      profile.aggression,
+    )
+    return { type: legal.canBet ? 'bet' : 'raise', amount: to }
+  }
 
   // --- unbet pot: check or lead out --------------------------------------
   if (toCall === 0) {
