@@ -700,8 +700,15 @@ function reRaiseAction(
     return legal.canCall ? { type: 'call' } : { type: 'check' }
   }
 
-  const need =
-    potOdds / PREFLOP_RANGES.realize + profile.tightness * PREFLOP_RANGES.perTightness * fieldScale
+  // A call nobody can bet after (it puts us all in, or everybody left is) goes
+  // straight to showdown and keeps all its equity, so it pays the bare price.
+  const closesBetting =
+    legal.callAmount >= player.stack ||
+    state.players.every((p) => p.id === player.id || p.status !== 'active')
+  const need = closesBetting
+    ? potOdds
+    : potOdds / PREFLOP_RANGES.realize +
+      profile.tightness * PREFLOP_RANGES.perTightness * fieldScale
   if (equity < need) {
     if (legal.canRaise && roll < profile.bluff * PREFLOP_RANGES.bluff) return raise(0.6)
     return { type: 'fold' }

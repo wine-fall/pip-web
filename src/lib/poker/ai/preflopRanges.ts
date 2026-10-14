@@ -32,8 +32,13 @@ export function openShare(state: HandState): number {
   const preflop = lineOf(state).filter((a) => a.street === 'preflop')
   const open = preflop.findIndex((a) => a.type === 'raise')
   if (open < 0) return OPENING.shareByBehind[0]
-  const dealt = state.players.filter((p) => p.status !== 'out').length
-  const behind = Math.max(1, dealt - (open + 1))
+  // Everybody dealt in who gets a turn: a blind all in from posting never acts,
+  // so it is nobody the open has to get through.
+  const acted = new Set(preflop.map((a) => a.playerId))
+  const acting = state.players.filter(
+    (p) => p.status !== 'out' && !(p.status === 'allin' && !acted.has(p.id)),
+  ).length
+  const behind = Math.max(1, acting - (open + 1))
   const shares = OPENING.shareByBehind
   return shares[Math.min(behind, shares.length - 1)]
 }

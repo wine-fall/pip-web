@@ -224,9 +224,11 @@ test('preflopRanges still 4-bets aces and calls with big ace-king', (t) => {
 
 test('preflopTop is the strongest share of hands, by the same order as preflopPercentile', (t) => {
   const top = preflopTop(0.05)
-  t.is(top.length, Math.round(0.05 * 1326))
+  // The share, rounded up to the end of the strength tie it lands in.
+  t.true(top.length >= Math.round(0.05 * 1326) && top.length < Math.round(0.06 * 1326))
   for (const hole of top) t.true(preflopPercentile(hole) >= 0.94)
-  t.is(preflopTop(0).length, 1)
+  // Never empty: the narrowest range is the hands tied for the top, aces and kings.
+  t.is(preflopTop(0).length, 12)
 })
 
 test('opponentTopShare deals from the range it names', (t) => {
@@ -260,4 +262,66 @@ test('openShare reads where the open came from', (t) => {
   const s = facingThreeBet('Ah Ad')
   // Under the gun six-handed: five behind.
   t.is(openShare(s), 0.15)
+})
+
+test('preflopTop never splits hands of equal strength by suit', (t) => {
+  for (const share of [0.02, 0.05, 0.1, 0.2]) {
+    const counts = new Map<string, number>()
+    for (const [a, b] of preflopTop(share)) {
+      if (a.rank === b.rank) counts.set(a.rank, (counts.get(a.rank) ?? 0) + 1)
+    }
+    for (const [rank, n] of counts) t.is(n, 6, `${rank}${rank} at ${share}`)
+  }
+})
+
+test('openShare does not count a blind that is all in from posting', (t) => {
+  let s = startHand({
+    seats: Array.from({ length: 6 }, (_, i) => ({
+      id: `s${i}`,
+      name: `s${i}`,
+      stack: i === 1 ? 1 : 200,
+    })),
+    buttonIndex: 0,
+    smallBlind: 1,
+    bigBlind: 2,
+    rng: mulberry32(1),
+  })
+  t.is(s.players[1].status, 'allin')
+  s = applyAction(s, { type: 'raise', amount: 6 })
+  // Under the gun with the small blind all in: four players still to act.
+  t.is(openShare(s), 0.19)
+})
+
+test('preflopRanges pays the bare price for a call that ends the betting', (t) => {
+  // Under the gun opens, the cutoff 3-bets queens, under the gun moves all in.
+  let s = startHand({
+    seats: Array.from({ length: 6 }, (_, i) => ({ id: `s${i}`, name: `s${i}`, stack: 200 })),
+    buttonIndex: 0,
+    smallBlind: 1,
+    bigBlind: 2,
+    rng: mulberry32(1),
+  })
+  const queens = cards('Qh Qd')
+  const spare = cards('2c 3d')
+  for (const p of s.players) {
+    p.hole = p.hole.map((c, i) =>
+      queens.some((q) => q.rank === c.rank && q.suit === c.suit) ? spare[i] : c,
+    )
+  }
+  s.players[5].hole = queens
+  s = applyAction(s, { type: 'raise', amount: 6 })
+  s = applyAction(s, { type: 'fold' })
+  s = applyAction(s, { type: 'raise', amount: 18 })
+  for (let i = 0; i < 3; i++) s = applyAction(s, { type: 'fold' })
+  s = applyAction(s, { type: 'raise', amount: 200 })
+  t.is(s.toActIndex, 5)
+  const venue = venueById('mainevent') as Venue
+  const profile = {
+    ...venue.ai,
+    iterations: 300,
+    experiment: { fastShowdown: true, preflopRanges: true },
+  }
+  let calls = 0
+  for (let r = 0; r < 40; r++) if (decideAction(s, profile, mulberry32(r)).type === 'call') calls++
+  t.true(calls >= 30, `${calls}/40`)
 })

@@ -227,12 +227,15 @@ function privateStraightDraw(hole: readonly Card[], community: readonly Card[]):
   return all !== 0 && all !== fours(mask(community))
 }
 
-let preflopOrder: (readonly [Card, Card])[] | null = null
+let preflopOrder: { hole: readonly [Card, Card]; s: number }[] | null = null
 
 /**
  * The top `share` of all 1,326 starting hands by `holeStrength`, strongest
  * first, for drawing an opponent from a percentile range (`estimateEquity`'s
- * `opponentTopShare`). Never fewer than one hand. Built once, on first use.
+ * `opponentTopShare`). Never fewer than one hand, and a cut that lands inside
+ * hands of equal strength takes all of them: cutting by deck order would keep
+ * some suits of a pair and drop the rest, and invent blockers that are not
+ * there. Built once, on first use.
  */
 export function preflopTop(share: number): readonly (readonly [Card, Card])[] {
   if (!preflopOrder) {
@@ -247,8 +250,10 @@ export function preflopTop(share: number): readonly (readonly [Card, Card])[] {
       }
     }
     // Stable on ties, so the list is the same on every engine.
-    preflopOrder = all.sort((a, b) => b.s - a.s).map((h) => h.hole)
+    preflopOrder = all.sort((a, b) => b.s - a.s)
   }
-  const n = Math.max(1, Math.min(preflopOrder.length, Math.round(share * preflopOrder.length)))
-  return preflopOrder.slice(0, n)
+  const order = preflopOrder
+  let n = Math.max(1, Math.min(order.length, Math.round(share * order.length)))
+  while (n < order.length && order[n].s === order[n - 1].s) n++
+  return order.slice(0, n).map((h) => h.hole)
 }
