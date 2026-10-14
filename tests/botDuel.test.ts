@@ -11,11 +11,14 @@
 import test from 'ava'
 import {
   addTotals,
+  CHUNK,
   configFrom,
+  foldChunks,
   type DuelConfig,
   parseSide,
   playCashDeal,
   playSngDeal,
+  runChunks,
   runDuel,
   type Side,
   seatPlan,
@@ -95,6 +98,17 @@ test('the same seed is the same run, and slices add up to the whole', (t) => {
   t.deepEqual(runDuel(cfg, 0, 4), whole)
   t.deepEqual(addTotals(runDuel(cfg, 0, 1), runDuel(cfg, 1, 4)), whole)
   t.notDeepEqual(runDuel(duel({ a: 'v1@cardroom', seed: 8 }), 0, 4), whole)
+})
+
+test('a run is folded a fixed chunk at a time, so any split of chunks gives the same bits', (t) => {
+  // Workers each take consecutive chunks; the parent folds every chunk in
+  // order. Splitting the chunks differently must not move a single bit.
+  const cfg = duel({ a: 'v1@cardroom', itersCap: 20 })
+  const deals = CHUNK * 2 + 3
+  const whole = foldChunks(runChunks(cfg, deals, 0, 3))
+  t.is(whole.deals, deals)
+  t.deepEqual(foldChunks([...runChunks(cfg, deals, 0, 1), ...runChunks(cfg, deals, 1, 3)]), whole)
+  t.deepEqual(foldChunks([...runChunks(cfg, deals, 0, 2), ...runChunks(cfg, deals, 2, 3)]), whole)
 })
 
 test('chips are conserved between the sides', (t) => {

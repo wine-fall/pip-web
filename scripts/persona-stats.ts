@@ -152,9 +152,19 @@ export function lookalikes(totals: PersonaTotals, bar = 3): [string, string][] {
 const IS_ENTRY =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href
 
+/** Blocks summed together before joining the run; fixed, for the reason `CHUNK` in bot-duel is. */
+const BLOCKS_PER_CHUNK = 10
+
 if (IS_ENTRY && process.env.PERSONA_SLICE) {
-  const { venueId, seed, start, end } = JSON.parse(process.env.PERSONA_SLICE)
-  process.stdout.write(JSON.stringify(runPersonas(venueById(venueId) as Venue, seed, start, end)))
+  const { venueId, seed, blocks, chunkStart, chunkEnd } = JSON.parse(process.env.PERSONA_SLICE)
+  const venue = venueById(venueId) as Venue
+  const out: PersonaTotals[] = []
+  for (let c = chunkStart; c < chunkEnd; c++) {
+    out.push(
+      runPersonas(venue, seed, c * BLOCKS_PER_CHUNK, Math.min((c + 1) * BLOCKS_PER_CHUNK, blocks)),
+    )
+  }
+  process.stdout.write(JSON.stringify(out))
   process.exit(0)
 }
 
@@ -165,10 +175,17 @@ function merge(a: PersonaTotals, b: PersonaTotals): PersonaTotals {
 }
 
 function runParallel(venueId: string, seed: number, blocks: number, workers: number) {
-  const chunk = Math.max(1, Math.ceil(blocks / workers))
-  const jobs: Promise<PersonaTotals>[] = []
-  for (let start = 0; start < blocks; start += chunk) {
-    const slice = { venueId, seed, start, end: Math.min(start + chunk, blocks) }
+  const chunks = Math.ceil(blocks / BLOCKS_PER_CHUNK)
+  const per = Math.max(1, Math.ceil(chunks / workers))
+  const jobs: Promise<PersonaTotals[]>[] = []
+  for (let chunkStart = 0; chunkStart < chunks; chunkStart += per) {
+    const slice = {
+      venueId,
+      seed,
+      blocks,
+      chunkStart,
+      chunkEnd: Math.min(chunkStart + per, chunks),
+    }
     jobs.push(
       new Promise((resolve, reject) => {
         const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(import.meta.url)], {
@@ -182,12 +199,13 @@ function runParallel(venueId: string, seed: number, blocks: number, workers: num
         child.on('error', reject)
         child.on('close', (code) => {
           if (code !== 0) return reject(new Error(`worker exited ${code}`))
-          resolve(JSON.parse(out) as PersonaTotals)
+          resolve(JSON.parse(out) as PersonaTotals[])
         })
       }),
     )
   }
-  return Promise.all(jobs).then((parts) => parts.reduce(merge, {}))
+  // Consecutive chunks per job, so job order is chunk order.
+  return Promise.all(jobs).then((parts) => parts.flat().reduce(merge, {}))
 }
 
 /** The middle rung of each band on the ladder. */

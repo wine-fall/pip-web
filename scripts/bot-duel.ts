@@ -342,6 +342,33 @@ export function runDuel(cfg: DuelConfig, start: number, end: number): DuelTotals
   return totals
 }
 
+/**
+ * How many deals are added up before being added to the run. Fixed, not
+ * derived from the worker count: floating-point sums depend on their grouping,
+ * so a run is only the same run to the last bit if it is always grouped the
+ * same way, however many workers share it.
+ */
+export const CHUNK = 25
+
+/** Totals for each chunk in `[chunkStart, chunkEnd)`, in order. */
+export function runChunks(
+  cfg: DuelConfig,
+  deals: number,
+  chunkStart: number,
+  chunkEnd: number,
+): DuelTotals[] {
+  const out: DuelTotals[] = []
+  for (let c = chunkStart; c < chunkEnd; c++) {
+    out.push(runDuel(cfg, c * CHUNK, Math.min((c + 1) * CHUNK, deals)))
+  }
+  return out
+}
+
+/** A run's totals from its chunk totals, folded in chunk order. */
+export function foldChunks(parts: readonly DuelTotals[]): DuelTotals {
+  return parts.reduce(addTotals, emptyTotals())
+}
+
 export interface DuelSummary {
   deals: number
   /** A's mean: bb/100 per chair (cash) or ROI per entry as a fraction (sng). */
@@ -370,7 +397,7 @@ export function summarize(t: DuelTotals, mode: Mode): DuelSummary {
 
 // --- workers -----------------------------------------------------------------
 
-interface SliceInput {
+interface RunInput {
   venueId: string
   a: string
   b: string
@@ -380,11 +407,15 @@ interface SliceInput {
   seed: number
   stackBb: number
   itersCap: number
-  start: number
-  end: number
 }
 
-export function configFrom(input: Omit<SliceInput, 'start' | 'end'>): DuelConfig {
+interface SliceInput extends RunInput {
+  deals: number
+  chunkStart: number
+  chunkEnd: number
+}
+
+export function configFrom(input: RunInput): DuelConfig {
   const venue = venueById(input.venueId)
   if (!venue) throw new Error(`unknown venue "${input.venueId}"`)
   return {
@@ -405,15 +436,23 @@ const IS_ENTRY =
 
 if (IS_ENTRY && process.env.DUEL_SLICE) {
   const input = JSON.parse(process.env.DUEL_SLICE) as SliceInput
-  process.stdout.write(JSON.stringify(runDuel(configFrom(input), input.start, input.end)))
+  process.stdout.write(
+    JSON.stringify(runChunks(configFrom(input), input.deals, input.chunkStart, input.chunkEnd)),
+  )
   process.exit(0)
 }
 
-function runParallel(input: Omit<SliceInput, 'start' | 'end'>, deals: number, workers: number) {
-  const chunk = Math.max(1, Math.ceil(deals / workers))
-  const jobs: Promise<DuelTotals>[] = []
-  for (let start = 0; start < deals; start += chunk) {
-    const slice: SliceInput = { ...input, start, end: Math.min(start + chunk, deals) }
+function runParallel(input: RunInput, deals: number, workers: number): Promise<DuelTotals> {
+  const chunks = Math.ceil(deals / CHUNK)
+  const per = Math.max(1, Math.ceil(chunks / workers))
+  const jobs: Promise<DuelTotals[]>[] = []
+  for (let chunkStart = 0; chunkStart < chunks; chunkStart += per) {
+    const slice: SliceInput = {
+      ...input,
+      deals,
+      chunkStart,
+      chunkEnd: Math.min(chunkStart + per, chunks),
+    }
     jobs.push(
       new Promise((resolve, reject) => {
         const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(import.meta.url)], {
@@ -428,7 +467,7 @@ function runParallel(input: Omit<SliceInput, 'start' | 'end'>, deals: number, wo
         child.on('close', (code) => {
           if (code !== 0) return reject(new Error(`worker exited ${code}`))
           try {
-            resolve(JSON.parse(out) as DuelTotals)
+            resolve(JSON.parse(out) as DuelTotals[])
           } catch (err) {
             reject(err)
           }
@@ -436,7 +475,9 @@ function runParallel(input: Omit<SliceInput, 'start' | 'end'>, deals: number, wo
       }),
     )
   }
-  return Promise.all(jobs).then((parts) => parts.reduce(addTotals, emptyTotals()))
+  // Jobs hold consecutive chunks, so their results in job order are every
+  // chunk in order.
+  return Promise.all(jobs).then((parts) => foldChunks(parts.flat()))
 }
 
 // --- CLI ---------------------------------------------------------------------
