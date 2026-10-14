@@ -54,16 +54,11 @@ import os from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { blindsAt } from '@/config/blinds'
 import { type Venue, venueById } from '@/config/venues'
-import { type AiExperiment, type AiProfile, decideAction } from '@/lib/poker/ai/policy'
+import type { AiProfile } from '@/lib/poker/ai/policy'
 import { createTableMemory, observeAction, type TableMemory } from '@/lib/poker/ai/memory'
 import { mulberry32, type Rng } from '@/lib/poker/cards'
-import {
-  type Action,
-  applyAction,
-  type HandState,
-  isHandComplete,
-  startHand,
-} from '@/lib/poker/engine'
+import { applyAction, type HandState, isHandComplete, startHand } from '@/lib/poker/engine'
+import { type Decider, POLICIES } from './ai-versions'
 import {
   addSeatStats,
   createHandTracker,
@@ -73,55 +68,6 @@ import {
   STAT_LABEL,
   type SeatStats,
 } from './table-stats'
-
-export type Decider = (
-  state: HandState,
-  profile: AiProfile,
-  rng: Rng,
-  memory: TableMemory,
-) => Action
-
-export interface Policy {
-  about: string
-  decide: Decider
-  /** Applied to the venue's profile before any `name:key=value` override. */
-  profile?: (p: AiProfile) => AiProfile
-}
-
-/**
- * The versions a duel can name. `v1` is the shipped AI. A new version earns a
- * line here by being switchable without touching `v1`: the Daily replays the
- * shipped AI off a seed, so the old one has to stay exactly as it is.
- */
-const withExperiment =
-  (experiment: AiExperiment) =>
-  (p: AiProfile): AiProfile => ({ ...p, experiment: { ...p.experiment, ...experiment } })
-
-/**
- * Eight chairs need eight entries. Seven and six behind continue the shipped
- * five-behind 0.15 downward the way full-ring charts do; the values are a
- * starting point to measure, not a solved range.
- */
-export const OPENING_EIGHT_HANDED = [0.42, 0.38, 0.42, 0.26, 0.19, 0.15, 0.13, 0.115] as const
-
-export const POLICIES: Record<string, Policy> = {
-  v1: { about: 'the shipped decideAction', decide: decideAction },
-  fast: {
-    about: 'v1 with showdowns settled by rankHoldem: must play exactly like v1',
-    decide: decideAction,
-    profile: withExperiment({ fastShowdown: true }),
-  },
-  exact: {
-    about: 'fast, plus opponents ranged by their exact hand and private draws',
-    decide: decideAction,
-    profile: withExperiment({ fastShowdown: true, exactRange: true }),
-  },
-  open8: {
-    about: 'v1 with first-in opening shares for seven and eight behind',
-    decide: decideAction,
-    profile: withExperiment({ openingByBehind: OPENING_EIGHT_HANDED }),
-  },
-}
 
 export interface Side {
   label: string
@@ -509,6 +455,16 @@ function statRows(a: SeatStats, b: SeatStats): string[] {
   rows.push(
     `  ${'open size (bb)'.padEnd(34)}${mean(a.openSize).padStart(10)}${mean(b.openSize).padStart(10)}`,
   )
+  const width = Math.max(a.openByBehind.length, b.openByBehind.length)
+  for (let behind = width - 1; behind >= 1; behind--) {
+    const cell = (x: SeatStats) => {
+      const t = x.openByBehind[behind]
+      return t ? `${pct(rate(t))}` : '-'
+    }
+    rows.push(
+      `  ${`first-in raise, ${behind} behind`.padEnd(34)}${cell(a).padStart(10)}${cell(b).padStart(10)}`,
+    )
+  }
   return rows
 }
 
