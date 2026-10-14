@@ -174,6 +174,16 @@ equity + pot odds + a personality.
   the tracker stats (VPIP, PFR, c-bet, fold to c-bet...) beside a regular's; `pnpm
   win-read` measures how accurate the win % is. `pnpm sim` and `pnpm cash-sim` play
   the AI against itself and cannot find a hole the policy shares with its own hero.
+  `pnpm bot-duel` plays two AI versions on the same cards with the seats swapped
+  (duplicate poker), so the deal's luck cancels and a version against itself scores
+  exactly 0; `pnpm persona-stats` asks whether a tracker can tell the cast apart.
+  Both, and `exploit-sim`/`ai-stats --ai <version>`, name versions from
+  `scripts/ai-versions.ts`.
+- **Experiments** (`AiProfile.experiment`): switches under measurement, all off by
+  default. With none set the AI makes exactly the decisions it shipped with, which
+  the Daily's replay rests on; `tests/aiExperiment.test.ts` pins that with a
+  fingerprint. `fastShowdown` settles the Monte-Carlo showdowns with `rankHoldem`
+  (`rank7.ts`): the same winners as pokersolver, so the same decisions, 12-34x sooner at The Main Event.
 - Difficulty scales per venue via the profile (see `config/venues.ts`).
 
 ## Variants
