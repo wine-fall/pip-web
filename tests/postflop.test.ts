@@ -93,7 +93,8 @@ test('readHand: outs for flush draws, open-enders and gutshots, private only', (
   t.is(readHand(cards('Ah 2h'), cards('Kh 8h 3c')).outs, 9)
   t.is(readHand(cards('8c 7d'), cards('6s 5h Kc')).outs, 8)
   t.is(readHand(cards('9c 7d'), cards('6s 5h Kc')).outs, 4)
-  t.is(readHand(cards('9h 8h'), cards('7h 6c 2h')).outs, 17)
+  // Two cards make both the flush and the straight; each card counts once.
+  t.is(readHand(cards('9h 8h'), cards('7h 6c 2h')).outs, 15)
   // A draw that is all board belongs to everybody.
   t.is(readHand(cards('2c 2d'), cards('9s Td Jh Qc')).outs, 0)
   t.is(readHand(cards('Ah 2h'), cards('Kh 8h 3c 4d 9s')).outs, 0)
@@ -180,4 +181,33 @@ test('a pair the board made is played for less than the raw equity says', (t) =>
   const shippedFolds = rateOf(s, SHIPPED, ['fold'], 200)
   const shapedFolds = rateOf(s, SHAPED, ['fold'], 200)
   t.true(shapedFolds >= shippedFolds, `shaped ${shapedFolds} shipped ${shippedFolds}`)
+})
+
+test('readHand: a pocket pair that plays above the board’s pairs is its own hand', (t) => {
+  const aces = readHand(cards('Ad Ac'), cards('Ks Kh 4c 4d 2s'))
+  t.false(aces.boardMade)
+  // Deuces under the board's two pair do not play: that hand is the board's.
+  t.true(readHand(cards('2d 2c'), cards('Ks Kh 4c 4d 9s')).boardMade)
+})
+
+test('readHand: two pair from both hole cards counts as top pair or better', (t) => {
+  t.true(readHand(cards('Jd Tc'), cards('Qh Jh Th')).topPair)
+})
+
+test('readHand: a board that is the nuts locks the split, and keeps its equity', (t) => {
+  const royal = readHand(cards('2c 3d'), cards('As Ks Qs Js Ts'))
+  t.true(royal.playsBoard)
+  t.true(royal.splitLocked)
+  t.false(readHand(cards('2c 3d'), cards('As Ks Qd Jh 9c')).splitLocked)
+})
+
+test('a split the board guarantees is never folded to a bet', (t) => {
+  let s = play(flopSpot('Qc Qd', '2c 3d', 'As Ks Qs'), { type: 'check' }, { type: 'check' })
+  s = play({ ...s, community: cards('As Ks Qs Js') }, { type: 'check' }, { type: 'check' })
+  s = play(
+    { ...s, community: cards('As Ks Qs Js Ts') },
+    { type: 'check' },
+    { type: 'bet', amount: 12 },
+  )
+  t.is(rateOf(s, SHAPED, ['fold'], 100), 0)
 })

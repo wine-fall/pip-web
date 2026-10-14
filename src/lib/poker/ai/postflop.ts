@@ -16,7 +16,7 @@
 // between what a hand makes and what the board makes for everybody, as in the
 // Loki/Poki papers' hand-potential reads); the code is written here.
 
-import type { Card, Rank, Rng } from '../cards'
+import { type Card, cardToString, createDeck, type Rank, type Rng } from '../cards'
 import { type HandState, type LegalActions, potSize } from '../engine'
 import { CATEGORY, categoryOf, rankHoldem } from '../rank7'
 import { preflopAggressor, streetIsUnbet } from './line'
@@ -150,6 +150,8 @@ export interface HandRead {
   edge: number
   boardMade: boolean
   playsBoard: boolean
+  /** The board is the nuts: every holding plays it, so every showdown splits. */
+  splitLocked: boolean
   topPair: boolean
   outs: number
 }
@@ -160,8 +162,6 @@ export function readHand(hole: readonly Card[], board: readonly Card[]): HandRea
   const cat7 = categoryOf(rank7)
   const catBoard = categoryOf(rankBoard)
   const edge = cat7 - catBoard
-  const boardMade = edge === 0 && catBoard >= CATEGORY.pair
-  const playsBoard = board.length === 5 && rank7 === rankBoard
 
   const boardTop = Math.max(...board.map((c) => RANK_VALUE[c.rank]))
   const boardRanks = new Set(board.map((c) => RANK_VALUE[c.rank]))
@@ -169,53 +169,78 @@ export function readHand(hole: readonly Card[], board: readonly Card[]): HandRea
   let privatePair = 0
   if (a === b) privatePair = a
   for (const v of [a, b]) if (boardRanks.has(v)) privatePair = Math.max(privatePair, v)
-  const topPair =
-    edge > 0 && (cat7 >= CATEGORY.trips || (privatePair > 0 && privatePair >= boardTop))
 
-  const outs =
-    board.length < 5 && cat7 < CATEGORY.straight
-      ? flushOuts(hole, board) + straightOuts(hole, board)
-      : 0
-  return { edge, boardMade, playsBoard, topPair, outs }
+  // Same category as the board is not enough to call it the board's: pocket
+  // aces on K-K-4-4 are aces and kings, two pair like the board's but theirs.
+  const boardMade =
+    edge === 0 &&
+    catBoard >= CATEGORY.pair &&
+    !(privatePair > 0 && pairedValues(rank7).includes(privatePair))
+  const playsBoard = board.length === 5 && rank7 === rankBoard
+  const splitLocked = playsBoard && !beatable(rankBoard, [...hole, ...board])
+
+  // Two pair made with both hole cards is stronger than top pair, whatever
+  // the board's top card.
+  const twoPrivatePairs =
+    cat7 === CATEGORY.twoPair && a !== b && boardRanks.has(a) && boardRanks.has(b)
+  const topPair =
+    edge > 0 &&
+    (cat7 >= CATEGORY.trips || twoPrivatePairs || (privatePair > 0 && privatePair >= boardTop))
+
+  const outs = board.length < 5 && cat7 < CATEGORY.straight ? drawOuts(hole, board) : 0
+  return { edge, boardMade, playsBoard, splitLocked, topPair, outs }
 }
 
-/** Nine outs for four to a flush with a hole card in it, none otherwise. */
-function flushOuts(hole: readonly Card[], board: readonly Card[]): number {
-  for (const suit of new Set(hole.map((c) => c.suit))) {
-    const onBoard = board.filter((c) => c.suit === suit).length
-    const inHand = hole.filter((c) => c.suit === suit).length
-    if (onBoard + inHand === 4 && onBoard < 4) return 9
+/** The ranks, as values 2 to 14, that a `rankHoldem` score holds two or more of. */
+function pairedValues(rank: number): number[] {
+  const k = rank % 0x100000
+  const nibble = (i: number) => ((k >> (4 * i)) & 0xf) + 2
+  switch (categoryOf(rank)) {
+    case CATEGORY.pair:
+      return [nibble(3)]
+    case CATEGORY.twoPair:
+      return [nibble(2), nibble(1)]
+    case CATEGORY.trips:
+      return [nibble(2)]
+    case CATEGORY.fullHouse:
+      return [nibble(1), nibble(0)]
+    case CATEGORY.quads:
+      return [nibble(1)]
+    default:
+      return []
   }
-  return 0
+}
+
+/** Whether any two unseen cards beat a five-card board on the river. */
+function beatable(rankBoard: number, seen: readonly Card[]): boolean {
+  const gone = new Set(seen.map(cardToString))
+  const unseen = createDeck().filter((c) => !gone.has(cardToString(c)))
+  const board = seen.slice(2)
+  for (let i = 0; i < unseen.length; i++) {
+    for (let j = i + 1; j < unseen.length; j++) {
+      if (rankHoldem([unseen[i], unseen[j]], board) > rankBoard) return true
+    }
+  }
+  return false
 }
 
 /**
- * Ranks that would complete a straight the board alone does not make, counted
- * four cards a rank: eight for an open-ender, four for a gutshot.
+ * Unseen cards that complete a straight or a flush the board alone does not
+ * make with that card, each counted once: nine for a flush draw, eight for an
+ * open-ender, four for a gutshot, fifteen for both a flush draw and an
+ * open-ender (two cards make both).
  */
-function straightOuts(hole: readonly Card[], board: readonly Card[]): number {
-  const maskOf = (cards: readonly Card[]) => {
-    let m = 0
-    for (const c of cards) {
-      const v = RANK_VALUE[c.rank]
-      m |= 1 << v
-      if (v === 14) m |= 1 << 1
-    }
-    return m
+function drawOuts(hole: readonly Card[], board: readonly Card[]): number {
+  const seen = new Set([...hole, ...board].map(cardToString))
+  let outs = 0
+  for (const c of createDeck()) {
+    if (seen.has(cardToString(c))) continue
+    const cat = categoryOf(rankHoldem(hole, [...board, c]))
+    if (cat < CATEGORY.straight || cat === CATEGORY.fullHouse || cat === CATEGORY.quads) continue
+    const boardAlone = categoryOf(rankHoldem([], [...board, c]))
+    if (boardAlone < CATEGORY.straight) outs++
   }
-  const straight = (m: number) => {
-    for (let low = 1; low <= 10; low++) if (((m >> low) & 0b11111) === 0b11111) return true
-    return false
-  }
-  const mine = maskOf([...hole, ...board])
-  const theirs = maskOf(board)
-  let ranks = 0
-  for (let v = 2; v <= 14; v++) {
-    const bit = (1 << v) | (v === 14 ? 1 << 1 : 0)
-    if (mine & (1 << v)) continue
-    if (straight(mine | bit) && !straight(theirs | bit)) ranks++
-  }
-  return Math.min(ranks, 2) * 4
+  return outs
 }
 
 // --- stack to pot --------------------------------------------------------------
@@ -294,11 +319,13 @@ export function readPostflop(
   const hand = readHand(player.hole, state.community)
   const equityKeep = !parts.edge
     ? 1
-    : hand.playsBoard
-      ? SHAPE.playsBoardKeep
-      : hand.boardMade
-        ? SHAPE.boardMadeKeep
-        : 1
+    : hand.splitLocked
+      ? 1
+      : hand.playsBoard
+        ? SHAPE.playsBoardKeep
+        : hand.boardMade
+          ? SHAPE.boardMadeKeep
+          : 1
   return {
     parts,
     texture: texture(state.community),
