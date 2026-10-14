@@ -50,6 +50,25 @@ export interface AiProfile {
   skill?: number
   /** A character's habit, if they have one. See `Habit`. */
   habit?: Habit
+  /**
+   * Changes under measurement (`pnpm bot-duel`). Every one is off unless set,
+   * and with none set this policy draws the same numbers in the same order as
+   * it always has, which is what the Daily's replay of its opponents rests on.
+   */
+  experiment?: AiExperiment
+}
+
+export interface AiExperiment {
+  /** Settle Monte-Carlo showdowns with `rankHoldem` (same answer, sooner). */
+  fastShowdown?: boolean
+  /** Rank opponents' sampled holdings by their exact hand (`exactStrength`). */
+  exactRange?: boolean
+  /**
+   * First-in opening shares by players behind, replacing `OPENING.shareByBehind`.
+   * The shipped table stops at five behind, so at seven and eight seats the
+   * first three chairs all open like six-handed under the gun.
+   */
+  openingByBehind?: readonly number[]
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n))
@@ -257,6 +276,8 @@ export function decideAction(
     // hand: it would read its own first two cards and every opponent as two
     // random ones, and play a different game from the one on the table.
     variant: state.variant,
+    fastShowdown: profile.experiment?.fastShowdown,
+    exactRange: profile.experiment?.exactRange,
   })
 
   // Unskilled players misread their hand strength. The noisy estimate feeds
@@ -486,8 +507,9 @@ export function decideAction(
     !lineOf(state).some((a) => a.street === 'preflop' && a.type !== 'fold')
   if (firstIn && legal.canRaise && rng() < skill) {
     const behind = opponents.filter((p) => p.status === 'active' && !p.hasActed).length
+    const byBehind = profile.experiment?.openingByBehind ?? OPENING.shareByBehind
     const share =
-      OPENING.shareByBehind[Math.min(behind, OPENING.shareByBehind.length - 1)] *
+      byBehind[Math.min(behind, byBehind.length - 1)] *
       Math.min(1, OPENING.loosest - OPENING.perTightness * profile.tightness)
     if (preflopPercentile(player.hole) >= 1 - share) {
       return {

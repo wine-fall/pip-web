@@ -5,7 +5,8 @@
 import type { Card, Rank, Rng, Suit } from './cards'
 import { RANKS, SUITS } from './cards'
 import { DECK_RANKS, HOLE_CARDS, type Variant, determineWinners } from './handEval'
-import { holeStrength, omahaStrength } from './range'
+import { exactStrength, holeStrength, omahaStrength } from './range'
+import { rankHoldem } from './rank7'
 
 /** How many candidate holdings a maximally-tight opponent picks the best of. */
 const MAX_EXTRA_CANDIDATES = 5
@@ -46,6 +47,20 @@ export interface EquityOptions {
    * estimates are raw equity against random hands.
    */
   variant?: Variant
+  /**
+   * Settle each sampled Hold'em showdown with `rankHoldem` instead of
+   * pokersolver. Same winners on every board (`tests/rank7.test.ts`), so the
+   * same rng gives the same answer, about fifty times sooner. Off by default
+   * while it is measured; Hold'em only, ignored elsewhere.
+   */
+  fastShowdown?: boolean
+  /**
+   * Rank an opponent's candidate holdings by their exact made hand (pair rank
+   * and kickers included) plus live draws, instead of `holeStrength`'s
+   * category read. Only changes anything when `opponentSelectivity` is set.
+   * Hold'em only.
+   */
+  exactRange?: boolean
 }
 
 function cardKey(c: Card): string {
@@ -160,7 +175,15 @@ export function estimateEquity(opts: EquityOptions): EquityResult {
   // Ranged at Hold'em and Omaha, each with its own idea of a strong holding.
   // Hi-lo and Short Deck stay raw: a hi-lo hand is strong two ways at once,
   // and Short Deck reorders the categories the strength read is built on.
-  const strength = variant === 'holdem' ? holeStrength : variant === 'omaha' ? omahaStrength : null
+  const strength =
+    variant === 'holdem'
+      ? opts.exactRange
+        ? exactStrength
+        : holeStrength
+      : variant === 'omaha'
+        ? omahaStrength
+        : null
+  const fast = !!opts.fastShowdown && variant === 'holdem'
   const ranged = !!strength && !!selectivity && selectivity.some((s) => s > 0)
 
   let wins = 0
@@ -192,6 +215,32 @@ export function estimateEquity(opts: EquityOptions): EquityResult {
         oppHoles.push(drawn.slice(o * holeSize, (o + 1) * holeSize))
       }
       board = [...community, ...drawn.slice(opponents * holeSize)]
+    }
+
+    if (fast) {
+      // The same tally as below, off one number per hand: the hero is among
+      // the winners when nobody ranks above them, and splits with every equal.
+      const mine = rankHoldem(opts.hole, board)
+      let beaten = false
+      let sharing = 1
+      for (const hole of oppHoles) {
+        const r = rankHoldem(hole, board)
+        if (r > mine) {
+          beaten = true
+          break
+        }
+        if (r === mine) sharing++
+      }
+      if (!beaten) {
+        if (sharing === 1) {
+          wins++
+          equitySum += 1
+        } else {
+          ties++
+          equitySum += 1 / sharing
+        }
+      }
+      continue
     }
 
     const contenders = [

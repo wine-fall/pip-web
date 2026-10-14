@@ -54,7 +54,7 @@ import os from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { blindsAt } from '@/config/blinds'
 import { type Venue, venueById } from '@/config/venues'
-import { type AiProfile, decideAction } from '@/lib/poker/ai/policy'
+import { type AiExperiment, type AiProfile, decideAction } from '@/lib/poker/ai/policy'
 import { createTableMemory, observeAction, type TableMemory } from '@/lib/poker/ai/memory'
 import { mulberry32, type Rng } from '@/lib/poker/cards'
 import {
@@ -93,8 +93,34 @@ export interface Policy {
  * line here by being switchable without touching `v1`: the Daily replays the
  * shipped AI off a seed, so the old one has to stay exactly as it is.
  */
+const withExperiment =
+  (experiment: AiExperiment) =>
+  (p: AiProfile): AiProfile => ({ ...p, experiment: { ...p.experiment, ...experiment } })
+
+/**
+ * Eight chairs need eight entries. Seven and six behind continue the shipped
+ * five-behind 0.15 downward the way full-ring charts do; the values are a
+ * starting point to measure, not a solved range.
+ */
+export const OPENING_EIGHT_HANDED = [0.42, 0.38, 0.42, 0.26, 0.19, 0.15, 0.13, 0.115] as const
+
 export const POLICIES: Record<string, Policy> = {
   v1: { about: 'the shipped decideAction', decide: decideAction },
+  fast: {
+    about: 'v1 with showdowns settled by rankHoldem: must play exactly like v1',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true }),
+  },
+  exact: {
+    about: 'fast, plus opponents ranged by their exact hand and private draws',
+    decide: decideAction,
+    profile: withExperiment({ fastShowdown: true, exactRange: true }),
+  },
+  open8: {
+    about: 'v1 with first-in opening shares for seven and eight behind',
+    decide: decideAction,
+    profile: withExperiment({ openingByBehind: OPENING_EIGHT_HANDED }),
+  },
 }
 
 export interface Side {
