@@ -164,8 +164,9 @@ if (IS_ENTRY && process.env.PERSONA_SLICE) {
       runPersonas(venue, seed, c * BLOCKS_PER_CHUNK, Math.min((c + 1) * BLOCKS_PER_CHUNK, blocks)),
     )
   }
-  process.stdout.write(JSON.stringify(out))
-  process.exit(0)
+  // A pipe takes 64 KB at a time and exit() drops the rest, so exit once it
+  // has all been written.
+  process.stdout.write(JSON.stringify(out), () => process.exit(0))
 }
 
 function merge(a: PersonaTotals, b: PersonaTotals): PersonaTotals {
